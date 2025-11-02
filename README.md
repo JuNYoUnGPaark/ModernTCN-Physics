@@ -27,7 +27,7 @@ TCN(Temporal Convolutional Network): 범용 시계열 합성곱 네트워크
 
 ### **TCN: Temporal Convolutional Networks**)
 
-TCN은 시퀀스 길이가 동일한 출력을 생성하는 1D CNN으로 미래 정보가 과거로 새어들어가지 않는 인과적 합성곱을 사용한다. 
+**TCN**은 시퀀스 길이가 동일한 출력을 생성하는 1D CNN으로 미래 정보가 과거로 새어들어가지 않는 인과적 합성곱을 사용한다. 
 
 ---
 
@@ -77,7 +77,6 @@ Dilated convolution은 합성곱 필터 간격에 빈 공간을 두어 층의 �
 
 $$
 F(s) = (x* _df)(s)= \sum_{i=0}^{k-1} f(i)*x_{s-d*i}
-
 $$
 
 - 수식 해석
@@ -93,7 +92,7 @@ $$
 
 정리하면 TCN은 해상도를 잃지 않으면서 매우 적은 층으로도 먼 과거의 정보를 볼 수 있는 구조인 것이다. 
 
-![image.png](attachment:57b71c8b-581b-469b-9241-12379a8c2adc:image.png)
+<img width="1024" height="395" alt="image" src="https://github.com/user-attachments/assets/7deed6a3-6924-4cd4-b71f-5a522ce93873" />
 
 - **`ModernTCN_Physics_1029.ipynb`에서 구현된 방법**
     
