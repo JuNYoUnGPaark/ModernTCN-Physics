@@ -76,7 +76,7 @@ Long Memory를 얻기 위해선 매우 깊은 네트워크 또는 큰 Filter가 
 Dilated convolution은 합성곱 필터 간격에 빈 공간을 두어 층의 깊이가 깊어질수록 더 많은 과거 정보를 지수적으로 접근할 수 있게 만든다. 
 
 $$
-F(s) = (x* _df)(s)= \sum_{i=0}^{k-1} f(i)*x_{s-d*i}
+F(s) = (x *_{d} f)(s) = \sum_{i=0}^{k-1} f(i) \cdot x_{s-d \cdot i}
 $$
 
 - 수식 해석
