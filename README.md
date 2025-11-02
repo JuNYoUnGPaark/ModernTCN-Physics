@@ -1,135 +1,354 @@
-# ModernTCN_Physics
-
-## 1. An Empirical Evaluation of Generic Convolutional and Recurrent Networks for Sequence Modeling (2018)
----
-
-*한 줄 요약: TCN 구조가 LSTM, GRU와 같은 RNN 계열을 많은 시퀀스 처리 작업에서 능가할 수 있음을 실증적으로 제시*
-
-TCN(Temporal Convolutional Network): 범용 시계열 합성곱 네트워크 
-
----
-
-### Abstract)
-
-**RNN**보다 **CNN**이 오디오 합성, 기계 번역 등의 분야에서 더 우수한 성능을 보이고 있다. 그렇다면 어떤 아키텍쳐를 선택하는 것이 좋을까? 
-
-간단한 **CNN** 아키텍쳐가 **LSTM**같은 대표적 **RNN** 구조를 다양한 작업과 데이터셋에서 뛰어넘으며, 보다 긴 효과적 기억력을 보여준다. 
-
-따라서 Sequence Modeling 시 무조건 **RNN**과 연결짓는 관념은 재고해야하며 **CNN**이 Sequence Modeling 작업의 기본 출발점으로 여겨져야 한다는 결론을 내린다. 
-
- 
-
-### Introduction)
-
-딥러닝 실무자들은 대체로 Sequence Modeling 작업에 **RNN**을 기본 출발점으로 삼고 있고 교육 또한 그러한 방향으로만 이루어지고 있다. 
-
-하지만 결과는 **TCN**이 다양한 Sequence Modeling 작업에서 대표적 **RNN**을 압도적으로 뛰어넘음을 보여준다. 또한 무한한 과거 정보를 다룰 수 있다는 **RNN**의 장점에도 불구하고 실제로는 더 긴 효과적 기억력을 가지고 있음이 밝혀졌다. 
-
-### **TCN: Temporal Convolutional Networks**)
-
-**TCN**은 시퀀스 길이가 동일한 출력을 생성하는 1D CNN으로 미래 정보가 과거로 새어들어가지 않는 인과적 합성곱을 사용한다. 
-
----
-
-Q. 인과적 합성곱 (Causal Convolution)이란?
-
-- **표준 합성곱 (Standard / Non-Causal) [예측, 자기회귀]**
-    - `y[t]` 를 계산하기 위해서 필터는 가운데 정렬된다.
-    - 즉, `X[t-1]`, `X[t]`, `X[t+1]` 을 본다.
-    - 결과적으로 `t` 시점을 계산하는데 `t+1`의 정보가 사용된다. (Leakage)
-- **인과적 합성곱 (Causal Convolution) [분류]**
-    - `y[t]`를 계산하기 위해 필터는 왼쪽 정렬된다.
-    - 즉, `x[t-2]`, `x[t-1]`, `x[t]` (과거와 현재)만 본다. (Non-Leakage)
-    - 구현 방법: 왼쪽에만 Padding하여 과거만 보도록 한다.
-
-Q. `ModernTCN_Physics_1029.ipynb` 는 Causal해야 할까? 
-
-- 현재 `ModernTCNBlock` 은 다음과 같이 구현되어 있다. → **Standard**
+## 1. 전체 흐름 (BaseModernTCNHAR)
 
 ```python
-padding = ((k - 1) * dilation) // 2
+class BaseModernTCNHAR(nn.Module):
+    def __init__(self, input_dim=9, hidden_dim=128, n_layers=4, n_classes=6,
+                 kernel_sizes=[3, 7], large_kernel=21, dropout=0.1, use_se=True):
+        super().__init__()
+        self.input_proj = nn.Conv1d(input_dim, hidden_dim, 1)
+        self.large_kernel_conv = LargeKernelConv1d(hidden_dim, large_kernel)
+        self.tcn_blocks = nn.ModuleList()
+        for i in range(n_layers):
+            dilation = 2 ** i
+            self.tcn_blocks.append(
+                ModernTCNBlock(
+                    hidden_dim, hidden_dim,
+                    kernel_sizes=kernel_sizes,
+                    dilation=dilation,
+                    dropout=dropout
+                )
+            )
+        self.final_large_kernel = LargeKernelConv1d(hidden_dim, large_kernel)
+        self.use_se = use_se
+        if use_se:
+            self.se = SqueezeExcitation1d(hidden_dim)
+        self.norm_final = nn.LayerNorm(hidden_dim)
+        self.head = nn.Linear(hidden_dim, n_classes)
+
+    def forward(self, x):
+        x = x.transpose(1, 2)
+        x = self.input_proj(x)
+        x = self.large_kernel_conv(x)
+        x = F.gelu(x)
+        for block in self.tcn_blocks:
+            x = block(x)
+        x = self.final_large_kernel(x)
+        x = F.gelu(x)
+        if self.use_se:
+            x = self.se(x)
+        x = F.adaptive_avg_pool1d(x, 1).squeeze(-1)
+        x = self.norm_final(x)
+        return self.head(x)
 ```
 
-- 이 코드는 Kernel_size=3 일때 `padding=1` 을 만든다. 이것은 대칭적인 ‘same’ 패딩으로 `y[t]`를 계산 시 `X[t+1]`을 보게 된다.
-- 우리가 수행하려고 하는 작업은 분류로 입력으로 들어온 Sequence 전체의 맥락을 파악하는 것이 중요하므로 표준 합성곱을 이용하는 것이 적절하다.
+1. `x ∈ (B,T,9)` → `transpose(1,2)` → `(B,9,T)` 
+2. `input_proj: Conv1d(9→hidden_dim, k=1)` : 채널 임베딩
+3. `large_kernel_conv(k=21, depthwise)` : **장주기 패턴** 포착 (길이 유지)
+4. `tcn_blocks × n_layers` : **멀티스케일 분기 + dilation**으로 수용영역 확장
+5. `final_large_kernel(k=21)` : 한 번 더 장주기 정제
+6. `SE(1D)` : 채널 중요도 재가중( squeeze: T→1, excite: 채널 게이팅 )
+7. `AdaptiveAvgPool1d(T→1)` 후 `squeeze` → `(B, hidden_dim)` 
+8. `LayerNorm(hidden_dim)` → `Linear(hidden_dim→n_classes)`
+
+## 2. MultiScaleConvBlock
+
+```python
+class MultiScaleConvBlock(nn.Module):
+    def __init__(self, channels, kernel_sizes=[3, 5, 7], dilation=1, dropout=0.1):
+        super().__init__()
+        self.branches = nn.ModuleList()
+        for k in kernel_sizes:
+            padding = ((k - 1) * dilation) // 2
+            branch = nn.ModuleDict({
+                'conv': DepthwiseSeparableConv1d(channels, channels, k, dilation, padding),
+                'norm': nn.BatchNorm1d(channels),
+                'dropout': nn.Dropout(dropout)
+            })
+            self.branches.append(branch)
+        self.fusion = nn.Conv1d(channels * len(kernel_sizes), channels, 1)
+
+    def forward(self, x):
+        outputs = []
+        target_length = x.size(2)
+        for branch in self.branches:
+            out = branch['conv'](x)
+            if out.size(2) != target_length:
+                out = out[:, :, :target_length]
+            out = branch['norm'](out)
+            out = F.gelu(out)
+            out = branch['dropout'](out)
+            outputs.append(out)
+        multi_scale = torch.cat(outputs, dim=1)
+        return self.fusion(multi_scale)
+```
+
+- 병렬 분기: `kernel_sizes=[3, 7]`
+    
+    각 분기: DepthwiseSeparbleConv1d → BN → GELU → Dropout
+    
+- 모든 분기 Convat 후 1X1 Conv로 융합 → 채널 수 복원
+- 다양한 패턴 동시에 포착, DS-Conv로 params. 절약, 1X1에서 Channel 상호작용
+
+## 3. ModernTCNBlock
+
+```python
+class ModernTCNBlock(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_sizes=[3, 7], dilation=1, dropout=0.1):
+        super().__init__()
+        
+        # NOTE: kernel_sizes가 [7]처럼 단일 리스트로 들어오면 Single-scale이 됨
+        self.multi_conv1 = MultiScaleConvBlock(
+            in_channels if in_channels == out_channels else out_channels,
+            kernel_sizes, dilation, dropout
+        )
+        
+        # NOTE: kernel_sizes 중 가장 큰 값을 기준으로 padding
+        max_k = max(kernel_sizes) if isinstance(kernel_sizes, list) else kernel_sizes
+        padding = ((max_k - 1) * dilation) // 2
+        
+        self.conv2 = DepthwiseSeparableConv1d(
+            out_channels, out_channels, max_k, dilation, padding
+        )
+        self.norm2 = nn.BatchNorm1d(out_channels)
+        self.dropout2 = nn.Dropout(dropout)
+        self.downsample = nn.Conv1d(in_channels, out_channels, 1) if in_channels != out_channels else None
+
+    def forward(self, x):
+        residual = x
+        target_length = x.size(2)
+        if self.downsample is not None:
+            x = self.downsample(x)
+            residual = x
+        
+        out = self.multi_conv1(x)
+        if out.size(2) != target_length:
+            out = out[:, :, :target_length]
+        
+        out = self.conv2(out)
+        if out.size(2) != target_length:
+            out = out[:, :, :target_length]
+        out = self.norm2(out)
+        out = F.gelu(out)
+        out = self.dropout2(out)
+        return F.gelu(out + residual)
+```
+
+- 흐름: `multi_conv1` → 가장 큰 kernel_size 기준으로 DS-Conv → BN → GELU → Dropout → residual add + GELU
 
 ---
 
-**TCN의 장점**: (1) 병렬성 (2) 유연한 receptive field 조정 (3) 안정적인 Gradient 전파 (4) 낮은 학습 메모리 요구량 (5) 다양한 입력 길이 처리 능력 
-
-**TCN의 단점**: (1) 평가 시 원본 데이터를 유지 (2) Domain Transfer 시 파라미터를 변경해야할 가능성 존재 
-
-### Causal Convolutions)
-
-TCN은 입력과 같은 길이의 출력을 생성하며, 미래의 정보가 과거로 흘러가지 않도록 보장해야 한다. 이를 위해 TCN은 1D Fully-Convolutional Network(FCN)을 사용하며, 각 은닉층(hidden layer)은 입력층과 길이가 같으며, padding을 추가하여 층의 길이를 유지한다. 또한 TCN은 "인과적 합성곱(causal convolution)"을 사용하여 특정 시간 t의 출력이 오직 현재 및 과거 시간의 입력과만 합성곱되도록 제한한다.
+**Q. 현재 모델에서 가장 알맞는 `n_layers` 선택 근거는?**
 
 $$
-TCN = 1D\ FCN + causal\ convolutions
+ERF=1+2\cdot(k\_large)+2\cdot(k\_max)\cdot1+2+4+...+2^{(L-1)}
 $$
 
-Long Memory를 얻기 위해선 매우 깊은 네트워크 또는 큰 Filter가 필요하지만 **dilation convolution(확장 합성곱)**을 사용하여 긴 과거 정보를 효과적으로 확보할 수 있다. 
+여기서 `k_large=21`, `k_max=7`, `L=n_layers`.
 
-### Dilation Convolutions)
+- UCI-HAR의 적절 TimeStep=128
+    - `n_layers=2` → ERF = 약 77
+    - `n_layers=3` → ERF = 약 125
+    - `n_layers=4` → ERF = 약 221
 
-일반적인 합성곱은 과거 정보를 층의 깊이만큼 선형적으로만 바라볼 수 있다. 이로 인해 긴 Sequence를 다루기 어려워진다. 
+따라서 n_layers를 증가시킨다고 반드시 좋아지는 것이 아닌 Dataset에 맞는 값을 사용하는 것이 중요하다.
 
-Dilated convolution은 합성곱 필터 간격에 빈 공간을 두어 층의 깊이가 깊어질수록 더 많은 과거 정보를 지수적으로 접근할 수 있게 만든다. 
+```python
+def rf(L, k_max=7, k_large=21):
+    return 1 + (k_large-1) + 2*(k_max-1)*sum(2**i for i in range(L)) + (k_large-1)
 
-$$
-F(s) = (x *_{d} f)(s) = \sum_{i=0}^{k-1} f(i) \cdot x_{s-d \cdot i}
-$$
+print(rf(2))  # 77
+print(rf(3))  # 125
+print(rf(4))  # 221 
+```
 
-- 수식 해석
-    - **Case 1: d=1 (표준 합성곱, 빈 공간 없음)**
-    • $F(s) = f(0) \cdot x_s + f(1) \cdot x_{s-1} + f(2) \cdot x_{s-2}$
-    • 필터는 현재(s), 바로 뒤(s-1), 그 뒤(s-2)를 **연속으로** 본다.
-    - **Case 2: d=2 (Dilation, 빈 공간 1개)**
-    • $F(s) = f(0) \cdot x_s + f(1) \cdot x_{s-2} + f(2) \cdot x_{s-4}$
-    • 필터는 현재(s), **두 칸 뒤(s-2)**, 네 칸 뒤(s-4)를 본다. 
-    • $x_{s-1}, \ x_{s-3}$ 을 건너뜀. 이것이 바로 "필터 간격에 빈 공간을 둔" 것.
+- n_layer=3 일때의 결과가 가장 좋았던 이유는 Data의 TimeStep에 맞춰서 Receptive Field를 설계해준 것이 이점을 가져다 준것이라고도 볼 수 있다.
+- 주의할점: 이론적 RF와 실제 RF는 다를 수 있기에 보통 RF를 T의 0.7~1.2배 구간에 맞추면 대개 안정적이다.
 
-이렇게 필터 간격에 빈 공간을 주는 것을 (띄엄 띄엄 보는 것) 여러 층으로 쌓으면서 Receptive Filed가 지수적으로 늘어난 것. 
+---
 
-정리하면 TCN은 해상도를 잃지 않으면서 매우 적은 층으로도 먼 과거의 정보를 볼 수 있는 구조인 것이다. 
+## 4. DepthwiseSeparbleConv1d
 
-<img width="1024" height="395" alt="image" src="https://github.com/user-attachments/assets/7deed6a3-6924-4cd4-b71f-5a522ce93873" />
+```python
+class DepthwiseSeparableConv1d(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size, dilation=1, padding=0):
+        super().__init__()
+        self.depthwise = nn.Conv1d(
+            in_channels, in_channels, kernel_size,
+            padding=padding, dilation=dilation, groups=in_channels
+        )
+        self.pointwise = nn.Conv1d(in_channels, out_channels, 1)
 
-- **`ModernTCN_Physics_1029.ipynb`에서 구현된 방법**
-    
-    Pytorch의 `ModulList`로 묶고 반복문을 돌면서 지수적으로 `dilation`을 증가시켜서 `ModernTCNBlock`을 구성
+    def forward(self, x):
+        x = self.depthwise(x)
+        x = self.pointwise(x)
+        return x
+```
+
+- Depthwise: 채널별 1D-conv (groups=channels)
+- Pointwise: 1×1로 채널 혼합
+- 표준 Conv 대비 **파라미터/연산 대폭 절감**.
+
+## 5. LargeKernelConv1d(k=21, depthwise)
+
+```python
+class LargeKernelConv1d(nn.Module):
+    def __init__(self, channels, kernel_size=21):
+        super().__init__()
+        padding = kernel_size // 2
+        self.depthwise = nn.Conv1d(
+            channels, channels, kernel_size,
+            padding=padding, groups=channels
+        )
+        self.norm = nn.BatchNorm1d(channels)
+    def forward(self, x):
+        out = self.depthwise(x)
+        out = self.norm(out)
+        return out
+```
+
+- 장주기 패턴(저주파 성분)을 한 번에 훑는 **롱컨텍스트 필터**.
+- 앞/뒤로 한 번씩 사용해 초기/말기 특징 안정화 (우선 이 코드는!)
+
+## 6. PhysicsModernTCNHAR (물리 헤드)
+
+```python
+class PhysicsModernTCNHAR(BaseModernTCNHAR):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        hidden_dim = self.head.in_features
+        self.physics_head = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim // 2),
+            nn.ReLU(),
+            nn.Linear(hidden_dim // 2, 6)
+        )
+
+    def forward(self, x, return_physics=False):
+        x = x.transpose(1, 2)
+        x_feat = self.input_proj(x)
+        x_feat = self.large_kernel_conv(x_feat)
+        x_feat = F.gelu(x_feat)
+        for block in self.tcn_blocks:
+            x_feat = block(x_feat)
+        x_feat = self.final_large_kernel(x_feat)
+        x_feat = F.gelu(x_feat)
+        if self.use_se:
+            x_feat = self.se(x_feat)
+        
+        # 1. 분류 헤드
+        pooled = F.adaptive_avg_pool1d(x_feat, 1).squeeze(-1)
+        pooled = self.norm_final(pooled)
+        logits = self.head(pooled)
+
+        if return_physics:
+            # 2. 물리 헤드
+            x_feat_transposed = x_feat.transpose(1, 2)
+            physics = self.physics_head(x_feat_transposed)
+            return logits, physics
+
+        return logits
+```
+
+- `head`(분류)와 병렬로 `physics_head(MLP)` 추가:
+    - 입력: `x_feat ∈ (B,C,T)` → `(B,T,C)`로 전치 → per-timestep MLP
+    - 출력: `(B,T,6)` = `[acc_x,y,z, gyro_x,y,z]`
+- physics_loss: 예측 6채널을 원 입력 X의 앞 6채널(body_acc/gyro)과 Smooth L1로 회귀
+    - 총손실: `CE + λ·physics` (코드 기본 λ=0.05)
+    - 역할: 특징이 물리 신호 복원에 유의미하도록 유도(보조감독)
+    - 현재는 physics 예측이 **정규화된 스케일**(정규화 적용 시)에서 비교됨. 
+    “물리 단위 복원”을 원하면 loss 쪽에서 **inverse-transform** 필요.
+
+---
+
+**Q. Physics Loss란?** 
+
+분류를 잘하는 것뿐 아니라 Feature Map이 실제 센서 신호를 다시 그려낼 수 있어야 한다는 보조 목표를 주는 것. (입력 신호 복원: Smooth L1)
+
+- 흐름
+    - 백본이 만든 특징 `x_feat` : `(B, C, T)`
+    - `physics_head`(작은 MLP)가 시간축별로 6개 값을 예측:
+        - `x_feat.transpose(1,2)` → `(B, T, C)`
+        - `physics_head` → **`physics_pred` = `(B, T, 6)`**
+            
+            (순서: `[acc_x, acc_y, acc_z, gyro_x, gyro_y, gyro_z]`)
+            
+    - 원래 입력 `X_raw`에서 앞 6채널(= body_acc 3 + body_gyro 3)을 꺼냄:
+        - **`X_raw[:, :, :6]` = `(B, T, 6)`**
+    - 두 텐서를 **시간축-채널별로** 비교해 오차를 계산:
+        - `Smooth L1(physics_pred, X_raw[:, :, :6])` → 스칼라
+        - 전체 손실: `loss = CE(logits, y) + λ * physics_loss` (코드에서 λ=0.05)
+
+- 구현 방법 = Smooth L1/Huber 사용
     
     ```python
-    class BaseModernTCNHAR(nn.Module):
-        def __init__(self, input_dim=9, hidden_dim=128, n_layers=4, n_classes=6,
-                     kernel_sizes=[3, 7], large_kernel=21, dropout=0.1, use_se=True):
-            super().__init__()
-            
-            # (생략)
-            
-            self.tcn_blocks = nn.ModuleList()
-            for i in range(n_layers):
-                dilation = 2 ** i  # <--- i가 0, 1, 2... 일 때 dilation은 1, 2, 4...
-                self.tcn_blocks.append(
-                    ModernTCNBlock(
-                        hidden_dim, hidden_dim,
-                        kernel_sizes=kernel_sizes,
-                        dilation=dilation, # <--- 계산된 dilation 값 적용
-                        dropout=dropout
-                    )
-                )
-             
-            # (생략)
+    def physics_loss(physics_pred, X_raw):
+        acc_pred = physics_pred[:, :, :3]
+        gyro_pred = physics_pred[:, :, 3:6]
+        acc_true = X_raw[:, :, 0:3]
+        gyro_true = X_raw[:, :, 3:6]
+        return F.smooth_l1_loss(acc_pred, acc_true) + F.smooth_l1_loss(gyro_pred, gyro_true)
     ```
     
 
-### Residual Connections)
+- 수식
+    
+    오차 $x=input-target$에 대해
+    
+    - $|x|< \beta$ 이면 L2처럼: $0.5 \cdot x^2/\beta$
+    - $|x|>=\beta$ 이면 L1처럼: $|x|-0.5\beta$
+    
+    즉, 작은 오차엔 부드럽게 큰 오차엔 크게 반응.
+    
+    *여기서 L1, L2는 가중치에 거는 규제가 아닌 “예측 - 정답”으로 생기는 오차를 계산할 때 사용하는 손실임. L1(MAE), L2(MSE), Smooth L1/Huber*
+    
 
-매 Layer마다 적용. 
+---
 
-### Weight normalization)
+## 7. GELU 사용
 
-파라미터 자체에 대한 normalization을 파라미터의 크기와 방향으로 수행한다. 
+<img width="850" height="564" alt="image" src="https://github.com/user-attachments/assets/9deadcb6-88a9-4254-b9b1-2765875ecc27" />
 
-### Conclusion)
+- 미분 가능 영역이 넓고, 깊은 네트워크에서 수렴이 매끄럽다(최근 ConvNext/Transformer 계열 추세).
 
-이 논문은 다양한 시퀀스 작업에서 일반적 합성곱 아키텍처가 순환 아키텍처보다 우수함을 경험적으로 입증했다. 결과적으로 시퀀스 모델링과 RNN의 밀접한 관계는 과거의 유산이며, 현재는 dilation 및 잔차 연결 같은 기술을 갖춘 TCN이 더욱 효율적인 선택일 수 있다. 향후 합성곱 네트워크가 시퀀스 모델링의 새로운 표준으로 자리잡을 가능성을 제안한다.
+## 9. Optimizer, Regularization, Scheduler
+
+```python
+AdamW(lr=5e-4, weight_decay=0.01)
+```
+
+- weight_decay는 L2 규제
+
+```python
+Gradient Clip (1.0)
+```
+
+- 폭주 방지. dilation + large kernel 조합에서 안정화
+
+```python
+CosineAnnealingLR(T_max=epochs)
+```
+
+- 전체 epoch 스케줄에 **강하게 의존**. epoch 바꾸면 궤적 달라짐.
+- *개선 팁*: **Warmup + Cosine**가 일반적으로 더 안정적
+
+## 10. 손실 구성,
+
+- Base: `loss = CE(logits, y)`
+- Physics: `loss = CE + λ·SmoothL1(physics_pred, X[:,:,:6])` (λ=0.05)
+
+---
+
+## 11. 개선해볼 사항 정리
+
+1. ~~적절한 n_layers 설정 기준 세우기~~ 
+2. 입력 정규화(train 통계로 z-score) → physics 회귀 스케일 일치시키기 
+3. large_kernel 앞 or 뒤쪽을 제거해보기
+4. **Batch size:** DS-Conv + large-kernel은 메모리 널널함 → 가능하면 ↑
+5. Warmup 적용해보기 
+6. Physics Loss 개선 및 발전시켜보기 
+7. 블록 시작점에 LayerNorm 또는 BatchNorm으로 Pre-Norm
+8. Stochastic Depth: 깊은 레이어 일부만 확률적으로 생략 → Train 과적합 상태
+9. λ 값 탐색 (0.01, 0.02, 0.05, 0.1, 0.15)
+10. AdamW Weight Decay 탐색 → 5e-3 ~ 1e-3 
+11. EMA 적용 (아마 Bad) 
+
+---
