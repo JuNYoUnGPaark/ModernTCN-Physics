@@ -63,3 +63,8 @@ test_loader = DataLoader(
   collate_fn=collate_norm
 )
 ```
+
+- 결과 비교: Full Model (Physics Loss 사용 모델)
+  기존: 0.9752
+  적용: 0.9774 (+0.022)
+  - 정규화를 적용해서 두 Loss가 같은 scale에서 경쟁할 수 있도록 하여 λ 튜닝을 정확히 할 수 있다. 
