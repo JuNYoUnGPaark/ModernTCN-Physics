@@ -1,8 +1,8 @@
-## Base Idea: "Modern" TCN
-- Depthwise Separable Conv: 표준 Conv 대비 params. FLOPs를 크게 감소시킨 효율적인 방식
-- Multi-Scale Conv: Kernel_size=[3, 7]을 병렬로 처리 후 융합하여, 모델이 당야한 시간적 길이의 패턴을 동시 포착
-- Large Kernel Conv: 모델의 시작과 끝에 큰 커널(k=19)을 사용하여 넓은 범위의 Context를 한번에 집약
-- Squeeze-Excitation(SE): 어떤 채널 정보가 현재 분류에 더 중요한지 동적으로 weight를 학습하는 attention 메커니즘 
+## Main Idea: "Modern" TCN
+1. `Depthwise Separable Conv`: 표준 Conv 대비 params. FLOPs를 크게 감소시킨 효율적인 방식
+2. `Multi-Scale Conv`: Kernel_size=[3, 7]을 병렬로 처리 후 융합하여, 모델이 당야한 시간적 길이의 패턴을 동시 포착
+3. `Large Kernel Conv`: 모델의 시작과 끝에 큰 커널(k=19)을 사용하여 넓은 범위의 Context를 한번에 집약
+4. `Squeeze-Excitation(SE)`: 어떤 채널 정보가 현재 분류에 더 중요한지 동적으로 weight를 학습하는 attention 메커니즘 
 
 ## 1. 전체 흐름 (BaseModernTCNHAR)
 
