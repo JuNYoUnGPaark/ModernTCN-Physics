@@ -280,9 +280,9 @@ L = (
 ```
 
 - 7가지 물리 손실을 `lambdas`라는 가중치로 섞어서 최종 물리손실 `L` 생성
-$
-L = (\lambda_{\text{grav}} \times L_{\text{grav}}) + (\lambda_{\text{gmag}} \times L_{\text{gmag}}) + (\lambda_{\text{comp}} \times L_{\text{comp}}) + (\lambda_{\text{bias}} \times L_{\text{bias}}) + (\lambda_{\text{smooth}} \times L_{\text{smooth}}) + (\lambda_{\text{split}} \times L_{\text{split}}) + (\lambda_{\text{pinn}} \times L_{\text{pinn}})
-$
+
+- $L = (\lambda_{\text{grav}} \times L_{\text{grav}}) + (\lambda_{\text{gmag}} \times L_{\text{gmag}}) + (\lambda_{\text{comp}} \times L_{\text{comp}}) + (\lambda_{\text{bias}} \times L_{\text{bias}}) + (\lambda_{\text{smooth}} \times L_{\text{smooth}}) + (\lambda_{\text{split}} \times L_{\text{split}}) + (\lambda_{\text{pinn}} \times L_{\text{pinn}})$
+  
 - `L`이 `train_physics`함수의 `L_phys`가 되어 `loss = loss_ce + phys_scale * L_phys` 형태로 최종 손실이 정의된다.
 
 ---
