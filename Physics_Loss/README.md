@@ -259,7 +259,7 @@ def estimate_dt_from_freq(default_dt=1/50):
 - 중력 방향의 실제 변화율(`dg/dt`)은 자이로로 계산한 물리 법칙(`-wxg`)과 같아야한다.
     - `dg = diff1(g_pred) / dt`: 모델이 예측한 `g_pred`가 **실제로** 얼마나 변했는지 계산 (미분).
     - `w_cross_g = torch.cross(gyro, g_pred)`: 자이로(`ω`)와 중력(`g`)으로 **물리 공식상** 변했어야 하는 값 (`ω×g`)을 계산.
-    - `L_pinn`: `dg/dt`와 `w_cross_g`는 같아야 하므로, `(dg + w_cross_g)`는 0에 가까워야 합니다. 0이 아니면 벌점을 줍니다.
+    - `L_pinn`: `dg/dt`와 `w_cross_g`는 같아야 하므로, `(dg + w_cross_g)`는 0에 가까워야 한다. 0이 아니면 손실로 계산.
 
 ---
 
